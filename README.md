@@ -10,7 +10,7 @@ GitHub Pages 链接：
 https://cherryhhhh.github.io/wangye/
 ```
 
-如果链接暂时打不开，可能是 GitHub Pages 还在部署中，等待几分钟后刷新即可。
+
 
 ## 网页功能
 

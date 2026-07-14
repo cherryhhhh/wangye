@@ -13,7 +13,7 @@
         .app-container { display: flex; height: 100vh; width: 100%; }
 
         .graph-panel {
-            flex: 4;
+            flex: 5;
             height: 100vh;
             background:
                 linear-gradient(#ffffffcc, #ffffffcc),
@@ -31,8 +31,8 @@
 
         .sidebar {
             flex: 1;
-            min-width: 300px;
-            max-width: 360px;
+            min-width: 280px;
+            max-width: 330px;
             height: 100vh;
             background: #f8fafc;
             border-left: 1px solid #e2e8f0;
@@ -93,6 +93,19 @@
         .modal-box .state-btn { display: block; width: 100%; padding: 10px; margin-bottom: 8px; border: 1px solid #e2e8f0; border-radius: 8px; background: white; cursor: pointer; font-size: 14px; text-align: left; transition: 0.2s; }
         .modal-box .state-btn:hover { background: #e8edf4; border-color: #4a7cf7; }
         .modal-box .close-btn { margin-top: 10px; color: #6a7a9a; cursor: pointer; text-align: center; }
+
+        @media (max-width: 900px) {
+            body { overflow: auto; }
+            .app-container { flex-direction: column; height: auto; min-height: 100vh; }
+            .graph-panel { height: 68vh; min-height: 520px; flex: none; }
+            .sidebar { max-width: none; width: 100%; height: auto; min-height: 32vh; border-left: none; border-top: 1px solid #e2e8f0; }
+            .graph-hint { top: 12px; width: calc(100% - 32px); text-align: center; font-size: 12px; }
+        }
+
+        @media (max-width: 560px) {
+            .graph-panel { height: 64vh; min-height: 460px; }
+            .sidebar { padding: 16px 14px; }
+        }
     </style>
 </head>
 <body>
@@ -135,10 +148,17 @@
         let lastResults = {};
         let selectedNodeId = null;
         let graphStructure = null;
-        const NODE_FONT_SIZE = 17;
-        const PPCM_FONT_SIZE = 19;
-        const NODE_WIDTH_MIN = 250;
-        const NODE_WIDTH_MAX = 310;
+        let resizeTimer = null;
+        const NODE_FONT_SIZE = 36;
+        const PPCM_FONT_SIZE = 38;
+        const NODE_WIDTH_MIN = 360;
+        const NODE_WIDTH_MAX = 640;
+        const NODE_HEIGHT_MIN = 168;
+        const NODE_HEIGHT_MAX = 340;
+
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
 
         function isPpcmNode(nodeId) {
             const name = allNodesInfo[nodeId]?.name || nodeId;
@@ -183,11 +203,102 @@
             return entries;
         }
 
-        function estimateNodeHeight(nodeId) {
+        function getNodeName(nodeId) {
+            return allNodesInfo[nodeId]?.name || nodeId;
+        }
+
+        function getNodeLineCount(nodeId) {
             const outcomeCount = Math.max(1, allNodesInfo[nodeId]?.outcomes?.length || 1);
-            const probabilityLines = Math.ceil(outcomeCount / 2);
-            const evidenceExtra = currentEvidence[nodeId] ? 24 : 0;
-            return 92 + probabilityLines * 24 + evidenceExtra;
+            const evidenceLine = currentEvidence[nodeId] ? 1 : 0;
+            return 1 + Math.ceil(outcomeCount / 2) + evidenceLine;
+        }
+
+        function getLongestTextLength(nodeId) {
+            const nameLength = getNodeName(nodeId).length;
+            const outcomes = allNodesInfo[nodeId]?.outcomes || [];
+            const rowLengths = [];
+            for (let index = 0; index < outcomes.length; index += 2) {
+                const rowOutcomes = outcomes.slice(index, index + 2);
+                rowLengths.push(rowOutcomes.map(outcome => outcome.length + 7).join(' / ').length);
+            }
+            const longestOutcome = rowLengths.length ? Math.max(...rowLengths) : 0;
+            const evidenceLength = currentEvidence[nodeId] ? currentEvidence[nodeId].length + 10 : 0;
+            return Math.max(nameLength, longestOutcome, evidenceLength);
+        }
+
+        function getAdaptiveFontSize(nodeId) {
+            const baseSize = isPpcmNode(nodeId) ? PPCM_FONT_SIZE : NODE_FONT_SIZE;
+            const longest = getLongestTextLength(nodeId);
+            const lines = getNodeLineCount(nodeId);
+            let size = baseSize;
+
+            if (longest > 46) size -= 5;
+            else if (longest > 38) size -= 4;
+            else if (longest > 30) size -= 3;
+            else if (longest > 24) size -= 2;
+
+            if (lines >= 5) size -= 1;
+
+            return clamp(size, 28, isPpcmNode(nodeId) ? PPCM_FONT_SIZE : NODE_FONT_SIZE);
+        }
+
+        function getNodeWidth(nodeId) {
+            const longest = getLongestTextLength(nodeId);
+            const lines = getNodeLineCount(nodeId);
+            const fontSize = getAdaptiveFontSize(nodeId);
+            const importanceBonus = isPpcmNode(nodeId) ? 42 : (currentEvidence[nodeId] ? 30 : 0);
+            const width = 260 + Math.min(longest, 48) * (fontSize * 0.34) + Math.min(lines, 5) * 12 + importanceBonus;
+            return clamp(width, NODE_WIDTH_MIN, NODE_WIDTH_MAX);
+        }
+
+        function estimateNodeHeight(nodeId) {
+            const lines = getNodeLineCount(nodeId);
+            const fontSize = getAdaptiveFontSize(nodeId);
+            const importanceBonus = isPpcmNode(nodeId) ? 24 : (currentEvidence[nodeId] ? 16 : 0);
+            const height = 70 + lines * (fontSize + 14) + importanceBonus;
+            return clamp(height, NODE_HEIGHT_MIN, NODE_HEIGHT_MAX);
+        }
+
+        function getGraphViewport() {
+            const container = document.getElementById('network');
+            return {
+                width: container?.clientWidth || window.innerWidth || 1200,
+                height: container?.clientHeight || window.innerHeight || 800
+            };
+        }
+
+        function getResponsiveColumnCount(layerNodeIds, maxWidth) {
+            if (layerNodeIds.some(isPpcmNode)) return 1;
+            const viewport = getGraphViewport();
+            const practicalWidth = Math.max(520, viewport.width - 120);
+            const gap = clamp(maxWidth + 150, 480, 660);
+            const columnsByWidth = clamp(Math.floor(practicalWidth / gap), 1, 4);
+            const preferred = viewport.width >= 1500 ? 4 : (viewport.width >= 980 ? 3 : (viewport.width >= 680 ? 2 : 1));
+            return Math.min(layerNodeIds.length, columnsByWidth, preferred);
+        }
+
+        function getLogicalSpacingBonus(nodeId, parentMap, childMap) {
+            const parentCount = parentMap.get(nodeId)?.length || 0;
+            const childCount = childMap.get(nodeId)?.length || 0;
+            return Math.min(parentCount + childCount, 5) * 12;
+        }
+
+        function getPreferredNetworkSlot(nodeId) {
+            const slotMap = {
+                Age: { col: -1.15, row: 0 },
+                Residence_area: { col: 0.25, row: 0 },
+                Region: { col: 0, row: 1 },
+                Sex: { col: 1.2, row: 1 },
+                Social_activity: { col: -1.45, row: 1.25 },
+                BADL: { col: -1.25, row: 2.25 },
+                Education_level: { col: 0.15, row: 2.1 },
+                Pension_insurance: { col: 1.25, row: 2.85 },
+                Solitary: { col: -0.6, row: 3.35 },
+                Physical_exercise: { col: 0.8, row: 4.0 },
+                Total_sleep_time: { col: -1.25, row: 4.25 },
+                PPCM: { col: 0, row: 5.45 }
+            };
+            return slotMap[nodeId] || null;
         }
 
         function calculateLayerLevels(nodeIds, edges) {
@@ -228,64 +339,69 @@
 
         function computeDeterministicLayout(structData) {
             const nodeIds = structData.nodes.map(node => node.id);
-            const levels = calculateLayerLevels(nodeIds, structData.edges);
-            const layerMap = new Map();
             const parentMap = new Map(nodeIds.map(nodeId => [nodeId, []]));
-
-            for (const nodeId of nodeIds) {
-                const layer = levels.get(nodeId) || 0;
-                if (!layerMap.has(layer)) layerMap.set(layer, []);
-                layerMap.get(layer).push(nodeId);
-            }
+            const childMap = new Map(nodeIds.map(nodeId => [nodeId, []]));
 
             for (const edge of structData.edges) {
                 if (parentMap.has(edge.to)) {
                     parentMap.get(edge.to).push(edge.from);
                 }
-            }
-
-            const sortedLayers = [...layerMap.keys()].sort((a, b) => a - b);
-            const yByLayer = new Map();
-            let yCursor = 0;
-            let previousMaxHeight = 0;
-
-            for (const layer of sortedLayers) {
-                const maxHeight = Math.max(...layerMap.get(layer).map(estimateNodeHeight));
-                if (yByLayer.size === 0) {
-                    yByLayer.set(layer, 0);
-                } else {
-                    yCursor += Math.max(220, previousMaxHeight / 2 + maxHeight / 2 + 82);
-                    yByLayer.set(layer, yCursor);
+                if (childMap.has(edge.from)) {
+                    childMap.get(edge.from).push(edge.to);
                 }
-                previousMaxHeight = maxHeight;
             }
 
+            const maxNodeWidth = Math.max(...nodeIds.map(getNodeWidth));
+            const maxNodeHeight = Math.max(...nodeIds.map(estimateNodeHeight));
+            const horizontalGap = clamp(maxNodeWidth + 170, 610, 760);
+            const verticalGap = clamp(maxNodeHeight + 112, 340, 430);
             const positions = {};
-            for (const layer of sortedLayers) {
-                const layerNodeIds = layerMap.get(layer).sort((a, b) => {
-                    if (isPpcmNode(a) && !isPpcmNode(b)) return 1;
-                    if (!isPpcmNode(a) && isPpcmNode(b)) return -1;
-                    const aParents = parentMap.get(a).filter(parentId => positions[parentId]);
-                    const bParents = parentMap.get(b).filter(parentId => positions[parentId]);
-                    const aCenter = aParents.length
-                        ? aParents.reduce((sum, parentId) => sum + positions[parentId].x, 0) / aParents.length
-                        : 0;
-                    const bCenter = bParents.length
-                        ? bParents.reduce((sum, parentId) => sum + positions[parentId].x, 0) / bParents.length
-                        : 0;
-                    if (aCenter !== bCenter) return aCenter - bCenter;
-                    return a.localeCompare(b);
-                });
-                const horizontalGap = 430;
-                const y = yByLayer.get(layer);
-                const stagger = layerNodeIds.length === 1 ? 0 : (layer % 2 === 0 ? -70 : 70);
 
-                layerNodeIds.forEach((nodeId, index) => {
-                    const x = isPpcmNode(nodeId)
-                        ? 0
-                        : (index - (layerNodeIds.length - 1) / 2) * horizontalGap + stagger;
-                    positions[nodeId] = { x, y };
-                });
+            nodeIds.forEach((nodeId, index) => {
+                const slot = getPreferredNetworkSlot(nodeId) || {
+                    col: (index % 3) - 1,
+                    row: Math.floor(index / 3)
+                };
+                positions[nodeId] = {
+                    x: slot.col * horizontalGap,
+                    y: slot.row * verticalGap
+                };
+            });
+
+            for (let pass = 0; pass < 5; pass += 1) {
+                for (let i = 0; i < nodeIds.length; i += 1) {
+                    for (let j = i + 1; j < nodeIds.length; j += 1) {
+                        const a = nodeIds[i];
+                        const b = nodeIds[j];
+                        const aPos = positions[a];
+                        const bPos = positions[b];
+                        const minX = (getNodeWidth(a) + getNodeWidth(b)) / 2 + 62;
+                        const minY = (estimateNodeHeight(a) + estimateNodeHeight(b)) / 2 + 48;
+                        const dx = bPos.x - aPos.x;
+                        const dy = bPos.y - aPos.y;
+
+                        if (Math.abs(dx) < minX && Math.abs(dy) < minY) {
+                            const pushX = (minX - Math.abs(dx)) / 2 + 10;
+                            const pushY = (minY - Math.abs(dy)) / 2 + 8;
+                            const directionX = dx >= 0 ? 1 : -1;
+                            const directionY = dy >= 0 ? 1 : -1;
+
+                            if (Math.abs(dx) / minX < Math.abs(dy) / minY) {
+                                if (!isPpcmNode(a)) aPos.x -= pushX * directionX;
+                                if (!isPpcmNode(b)) bPos.x += pushX * directionX;
+                            } else {
+                                if (!isPpcmNode(a)) aPos.y -= pushY * directionY;
+                                if (!isPpcmNode(b)) bPos.y += pushY * directionY;
+                            }
+                        }
+                    }
+                }
+            }
+
+            const ppcmId = nodeIds.find(isPpcmNode);
+            if (ppcmId) {
+                const bottomY = Math.max(...nodeIds.filter(id => id !== ppcmId).map(id => positions[id].y));
+                positions[ppcmId] = { x: 0, y: bottomY + verticalGap * 0.95 };
             }
 
             return positions;
@@ -303,16 +419,16 @@
                 physics: false,
                 shape: 'ellipse',
                 font: {
-                    size: isPpcmNode(node.id) ? PPCM_FONT_SIZE : NODE_FONT_SIZE,
+                    size: getAdaptiveFontSize(node.id),
                     color: '#0f172a',
                     face: 'Segoe UI',
                     align: 'center',
                     multi: true
                 },
                 color: { background: '#eef6ff', border: isPpcmNode(node.id) ? '#b45309' : '#2a4a7a' },
-                borderWidth: isPpcmNode(node.id) ? 3 : 2,
-                margin: { top: 12, right: 16, bottom: 12, left: 16 },
-                widthConstraint: { minimum: NODE_WIDTH_MIN, maximum: NODE_WIDTH_MAX },
+                borderWidth: isPpcmNode(node.id) ? 2 : 2,
+                margin: { top: 14, right: 20, bottom: 14, left: 20 },
+                widthConstraint: { minimum: getNodeWidth(node.id), maximum: getNodeWidth(node.id) },
                 heightConstraint: { minimum: minHeight }
             };
         }
@@ -338,7 +454,7 @@
                     ...edge,
                     arrows: 'to',
                     color: { color: '#a8b6c8', highlight: '#1a2a4a' },
-                    smooth: { type: 'continuous', roundness: 0.34 }
+                    smooth: { type: 'continuous', roundness: 0.42 }
                 }));
 
                 nodesDataSet = new vis.DataSet(nodes);
@@ -353,7 +469,7 @@
                     edges: {
                         arrows: { to: { enabled: true, scaleFactor: 0.8 } },
                         color: { color: '#a8b6c8', highlight: '#1a2a4a' },
-                        smooth: { type: 'continuous', roundness: 0.34 }
+                        smooth: { type: 'continuous', roundness: 0.42 }
                     },
                     physics: { enabled: false },
                     interaction: {
@@ -372,7 +488,15 @@
                 await runInference();
                 updateGraphColorsAndLabels();
                 updateEvidenceList();
-                network.fit({ animation: false, padding: 44 });
+                fitReadableGraph();
+
+                window.addEventListener('resize', function() {
+                    clearTimeout(resizeTimer);
+                    resizeTimer = setTimeout(function() {
+                        updateGraphColorsAndLabels();
+                        if (network) fitReadableGraph();
+                    }, 160);
+                });
             } catch (e) {
                 console.error(e);
                 alert('Initialization failed: ' + e.message);
@@ -554,6 +678,15 @@
             return lines.join('\n');
         }
 
+        function fitReadableGraph() {
+            if (!network) return;
+            network.fit({ animation: false, padding: 52 });
+            const scale = network.getScale();
+            if (scale < 0.76) {
+                network.moveTo({ scale: 0.76, animation: false });
+            }
+        }
+
         function getMaxProbability(probs) {
             return Math.max(...Object.values(probs).map(value => Number(value) || 0), 0);
         }
@@ -562,6 +695,7 @@
             if (!nodesDataSet) return;
 
             const updates = [];
+            const positions = graphStructure ? computeDeterministicLayout(graphStructure) : {};
             for (const nodeId of getOrderedResultNodeIds(lastResults)) {
                 const probs = lastResults[nodeId];
                 if (!probs || probs.error) continue;
@@ -581,21 +715,26 @@
                         background: bgColor,
                         border: isEvidence ? '#d97706' : (isPpcm ? '#b45309' : '#2a4a7a')
                     },
-                    borderWidth: isEvidence ? 4 : (isPpcm ? 3 : 2),
+                    borderWidth: isEvidence ? 3 : 2,
                     font: {
-                        size: isPpcm ? PPCM_FONT_SIZE : NODE_FONT_SIZE,
+                        size: getAdaptiveFontSize(nodeId),
                         color: '#0f172a',
                         face: 'Segoe UI',
                         align: 'center',
                         multi: true,
                         bold: isEvidence || isPpcm
                     },
-                    margin: { top: 12, right: 16, bottom: 12, left: 16 },
-                    widthConstraint: { minimum: NODE_WIDTH_MIN, maximum: NODE_WIDTH_MAX },
-                    heightConstraint: { minimum: estimateNodeHeight(nodeId) }
+                    margin: { top: 14, right: 20, bottom: 14, left: 20 },
+                    widthConstraint: { minimum: getNodeWidth(nodeId), maximum: getNodeWidth(nodeId) },
+                    heightConstraint: { minimum: estimateNodeHeight(nodeId) },
+                    x: positions[nodeId]?.x,
+                    y: positions[nodeId]?.y,
+                    fixed: { x: true, y: true },
+                    physics: false
                 });
             }
             nodesDataSet.update(updates);
+            fitReadableGraph();
         }
 
         function displayResults(data) {

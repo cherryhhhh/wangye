@@ -9,16 +9,17 @@
     <script src="network-data.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: #f4f7fb; height: 100vh; overflow: hidden; }
+        body { font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: #f5f7fb; height: 100vh; overflow: hidden; }
         .app-container { display: flex; height: 100vh; width: 100%; }
 
         .graph-panel {
-            flex: 5;
+            flex: 1 1 auto;
+            min-width: 0;
             height: 100vh;
             background:
-                linear-gradient(#ffffffcc, #ffffffcc),
-                radial-gradient(circle at 1px 1px, #dbe5f0 1px, transparent 0);
-            background-size: auto, 36px 36px;
+                linear-gradient(#fbfdffdd, #fbfdffdd),
+                radial-gradient(circle at 1px 1px, #d9e3ee 1px, transparent 0);
+            background-size: auto, 40px 40px;
             position: relative;
         }
         #network { width: 100%; height: 100%; }
@@ -30,9 +31,9 @@
         }
 
         .sidebar {
-            flex: 1;
-            min-width: 280px;
-            max-width: 330px;
+            flex: 0 0 320px;
+            min-width: 300px;
+            max-width: 340px;
             height: 100vh;
             background: #f8fafc;
             border-left: 1px solid #e2e8f0;
@@ -49,7 +50,7 @@
             padding-bottom: 12px;
         }
 
-        .evidence-section { background: white; border-radius: 8px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 16px; }
+        .evidence-section { background: white; border-radius: 8px; padding: 16px; box-shadow: 0 2px 8px rgba(15,23,42,0.04); margin-bottom: 16px; }
         .evidence-section h3 { font-size: 14px; color: #2d3a5a; margin-bottom: 10px; }
         .evidence-item { display: flex; justify-content: space-between; align-items: center; background: #f1f5f9; padding: 6px 12px; border-radius: 6px; margin-bottom: 6px; font-size: 13px; gap: 10px; }
         .evidence-item .node-name { font-weight: 600; color: #1a2a4a; }
@@ -57,7 +58,7 @@
         .evidence-item .clear-ev { color: #b91c1c; cursor: pointer; font-weight: bold; margin-left: 10px; }
         .no-evidence { color: #8a9aaa; font-size: 13px; }
 
-        .result-section { flex: 1; background: white; border-radius: 8px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); overflow-y: auto; }
+        .result-section { flex: 1; background: white; border-radius: 8px; padding: 16px; box-shadow: 0 2px 8px rgba(15,23,42,0.04); overflow-y: auto; }
         .result-section h3 { font-size: 14px; color: #2d3a5a; margin-bottom: 10px; }
         .result-item { margin-bottom: 14px; }
         .result-item .r-node-name {
@@ -149,12 +150,16 @@
         let selectedNodeId = null;
         let graphStructure = null;
         let resizeTimer = null;
-        const NODE_FONT_SIZE = 36;
-        const PPCM_FONT_SIZE = 38;
-        const NODE_WIDTH_MIN = 360;
-        const NODE_WIDTH_MAX = 640;
-        const NODE_HEIGHT_MIN = 168;
-        const NODE_HEIGHT_MAX = 340;
+        const BASE_NODE_FONT_SIZE = 14;
+        const BASE_PPCM_FONT_SIZE = 16;
+        const NODE_WIDTH_MIN = 180;
+        const NODE_WIDTH_MAX = 300;
+        const PPCM_WIDTH_MIN = 220;
+        const PPCM_WIDTH_MAX = 330;
+        const NODE_HEIGHT_MIN = 92;
+        const NODE_HEIGHT_MAX = 150;
+        const PPCM_HEIGHT_MIN = 106;
+        const PPCM_HEIGHT_MAX = 164;
 
         function clamp(value, min, max) {
             return Math.max(min, Math.min(max, value));
@@ -182,6 +187,23 @@
             return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         }
 
+        function formatOutcomeLabel(value) {
+            return String(value).replace(/_/g, ' ');
+        }
+
+        function measureTextUnits(value) {
+            let units = 0;
+            for (const char of String(value)) {
+                const code = char.charCodeAt(0);
+                if (code > 255) units += 1.7;
+                else if (char === ' ') units += 0.36;
+                else if ('ilI.,:;|'.includes(char)) units += 0.35;
+                else if ('MW@%'.includes(char)) units += 1.04;
+                else units += 0.68;
+            }
+            return units;
+        }
+
         function getOrderedResultNodeIds(data) {
             const ids = Object.keys(data);
             const ppcmIds = ids.filter(isPpcmNode);
@@ -207,56 +229,89 @@
             return allNodesInfo[nodeId]?.name || nodeId;
         }
 
-        function getNodeLineCount(nodeId) {
-            const outcomeCount = Math.max(1, allNodesInfo[nodeId]?.outcomes?.length || 1);
-            const evidenceLine = currentEvidence[nodeId] ? 1 : 0;
-            return 1 + Math.ceil(outcomeCount / 2) + evidenceLine;
+        function getProbabilityLine(outcome, probability) {
+            const value = probability === null || probability === undefined ? 0.999 : Number(probability) || 0;
+            return `${formatOutcomeLabel(outcome)} ${(value * 100).toFixed(1)}%`;
         }
 
-        function getLongestTextLength(nodeId) {
-            const nameLength = getNodeName(nodeId).length;
-            const outcomes = allNodesInfo[nodeId]?.outcomes || [];
-            const rowLengths = [];
-            for (let index = 0; index < outcomes.length; index += 2) {
-                const rowOutcomes = outcomes.slice(index, index + 2);
-                rowLengths.push(rowOutcomes.map(outcome => outcome.length + 7).join(' / ').length);
+        function getSizingEntries(nodeId, probs) {
+            if (probs && !probs.error) return getOutcomeEntries(nodeId, probs);
+            return (allNodesInfo[nodeId]?.outcomes || []).map(outcome => [outcome, 0.999]);
+        }
+
+        function getOutcomeRows(nodeId, probs) {
+            const entries = getSizingEntries(nodeId, probs);
+            const rows = [];
+            const rowLimit = isPpcmNode(nodeId) ? 30 : 34;
+
+            for (let index = 0; index < entries.length; index += 2) {
+                const pair = entries.slice(index, index + 2)
+                    .map(([outcome, probability]) => getProbabilityLine(outcome, probability));
+                const combined = pair.join(' / ');
+
+                if (pair.length === 2 && measureTextUnits(combined) > rowLimit) {
+                    rows.push(pair[0], pair[1]);
+                } else {
+                    rows.push(combined);
+                }
             }
-            const longestOutcome = rowLengths.length ? Math.max(...rowLengths) : 0;
-            const evidenceLength = currentEvidence[nodeId] ? currentEvidence[nodeId].length + 10 : 0;
-            return Math.max(nameLength, longestOutcome, evidenceLength);
+
+            return rows;
+        }
+
+        function getNodeLabelLines(nodeId, probs) {
+            const lines = [getNodeName(nodeId), ...getOutcomeRows(nodeId, probs)];
+            if (currentEvidence[nodeId]) {
+                lines.push(`Evidence: ${formatOutcomeLabel(currentEvidence[nodeId])}`);
+            }
+            return lines;
+        }
+
+        function getNodeSizeProfile(nodeId, probs = lastResults[nodeId]) {
+            const isPpcm = isPpcmNode(nodeId);
+            const lines = getNodeLabelLines(nodeId, probs);
+            const longestLineUnits = Math.max(...lines.map(measureTextUnits), 1);
+            const baseFontSize = isPpcm ? BASE_PPCM_FONT_SIZE : BASE_NODE_FONT_SIZE;
+            const horizontalPadding = isPpcm ? 46 : 40;
+            const verticalPadding = isPpcm ? 34 : 28;
+            const minWidth = isPpcm ? PPCM_WIDTH_MIN : NODE_WIDTH_MIN;
+            const maxWidth = isPpcm ? PPCM_WIDTH_MAX : NODE_WIDTH_MAX;
+            const minHeight = isPpcm ? PPCM_HEIGHT_MIN : NODE_HEIGHT_MIN;
+            const maxHeight = isPpcm ? PPCM_HEIGHT_MAX : NODE_HEIGHT_MAX;
+
+            const preferredWidth = Math.ceil(longestLineUnits * baseFontSize * 0.62 + horizontalPadding);
+            const width = clamp(preferredWidth, minWidth, maxWidth);
+            let fontSize = Math.min(
+                baseFontSize,
+                (width - horizontalPadding) / Math.max(longestLineUnits * 0.62, 1)
+            );
+
+            const lineHeightRatio = 1.34;
+            const preferredHeight = Math.ceil(lines.length * fontSize * lineHeightRatio + verticalPadding);
+            const height = clamp(preferredHeight, minHeight, maxHeight);
+            fontSize = Math.min(
+                fontSize,
+                (height - verticalPadding) / Math.max(lines.length * lineHeightRatio, 1)
+            );
+
+            return {
+                width,
+                height,
+                fontSize: Math.round(clamp(fontSize, isPpcm ? 12 : 11, baseFontSize)),
+                margin: { top: 10, right: 16, bottom: 10, left: 16 }
+            };
         }
 
         function getAdaptiveFontSize(nodeId) {
-            const baseSize = isPpcmNode(nodeId) ? PPCM_FONT_SIZE : NODE_FONT_SIZE;
-            const longest = getLongestTextLength(nodeId);
-            const lines = getNodeLineCount(nodeId);
-            let size = baseSize;
-
-            if (longest > 46) size -= 5;
-            else if (longest > 38) size -= 4;
-            else if (longest > 30) size -= 3;
-            else if (longest > 24) size -= 2;
-
-            if (lines >= 5) size -= 1;
-
-            return clamp(size, 28, isPpcmNode(nodeId) ? PPCM_FONT_SIZE : NODE_FONT_SIZE);
+            return getNodeSizeProfile(nodeId).fontSize;
         }
 
         function getNodeWidth(nodeId) {
-            const longest = getLongestTextLength(nodeId);
-            const lines = getNodeLineCount(nodeId);
-            const fontSize = getAdaptiveFontSize(nodeId);
-            const importanceBonus = isPpcmNode(nodeId) ? 42 : (currentEvidence[nodeId] ? 30 : 0);
-            const width = 260 + Math.min(longest, 48) * (fontSize * 0.34) + Math.min(lines, 5) * 12 + importanceBonus;
-            return clamp(width, NODE_WIDTH_MIN, NODE_WIDTH_MAX);
+            return getNodeSizeProfile(nodeId).width;
         }
 
         function estimateNodeHeight(nodeId) {
-            const lines = getNodeLineCount(nodeId);
-            const fontSize = getAdaptiveFontSize(nodeId);
-            const importanceBonus = isPpcmNode(nodeId) ? 24 : (currentEvidence[nodeId] ? 16 : 0);
-            const height = 70 + lines * (fontSize + 14) + importanceBonus;
-            return clamp(height, NODE_HEIGHT_MIN, NODE_HEIGHT_MAX);
+            return getNodeSizeProfile(nodeId).height;
         }
 
         function getGraphViewport() {
@@ -267,148 +322,115 @@
             };
         }
 
-        function getResponsiveColumnCount(layerNodeIds, maxWidth) {
-            if (layerNodeIds.some(isPpcmNode)) return 1;
+        function getLayoutMetrics(nodeIds) {
             const viewport = getGraphViewport();
-            const practicalWidth = Math.max(520, viewport.width - 120);
-            const gap = clamp(maxWidth + 150, 480, 660);
-            const columnsByWidth = clamp(Math.floor(practicalWidth / gap), 1, 4);
-            const preferred = viewport.width >= 1500 ? 4 : (viewport.width >= 980 ? 3 : (viewport.width >= 680 ? 2 : 1));
-            return Math.min(layerNodeIds.length, columnsByWidth, preferred);
-        }
+            const maxNodeWidth = Math.max(...nodeIds.map(getNodeWidth), NODE_WIDTH_MAX);
+            const maxNodeHeight = Math.max(...nodeIds.map(estimateNodeHeight), NODE_HEIGHT_MAX);
+            const radiusX = clamp(viewport.width * 0.38, maxNodeWidth * 1.75, 620);
+            const radiusY = clamp(viewport.height * 0.36, maxNodeHeight * 2.05, 410);
 
-        function getLogicalSpacingBonus(nodeId, parentMap, childMap) {
-            const parentCount = parentMap.get(nodeId)?.length || 0;
-            const childCount = childMap.get(nodeId)?.length || 0;
-            return Math.min(parentCount + childCount, 5) * 12;
+            return {
+                radiusX,
+                radiusY,
+                maxX: radiusX * 1.16,
+                maxY: radiusY * 1.16
+            };
         }
 
         function getPreferredNetworkSlot(nodeId) {
             const slotMap = {
-                Age: { col: -1.15, row: 0 },
-                Residence_area: { col: 0.25, row: 0 },
-                Region: { col: 0, row: 1 },
-                Sex: { col: 1.2, row: 1 },
-                Social_activity: { col: -1.45, row: 1.25 },
-                BADL: { col: -1.25, row: 2.25 },
-                Education_level: { col: 0.15, row: 2.1 },
-                Pension_insurance: { col: 1.25, row: 2.85 },
-                Solitary: { col: -0.6, row: 3.35 },
-                Physical_exercise: { col: 0.8, row: 4.0 },
-                Total_sleep_time: { col: -1.25, row: 4.25 },
-                PPCM: { col: 0, row: 5.45 }
+                PPCM: { x: 0, y: 0, anchor: true },
+                Residence_area: { x: 0.00, y: -1.00 },
+                Sex: { x: 0.54, y: -0.84 },
+                Education_level: { x: 0.91, y: -0.41 },
+                Pension_insurance: { x: 0.99, y: 0.16 },
+                Physical_exercise: { x: 0.74, y: 0.67 },
+                Total_sleep_time: { x: 0.26, y: 0.97 },
+                Solitary: { x: -0.31, y: 0.95 },
+                BADL: { x: -0.78, y: 0.63 },
+                Social_activity: { x: -0.99, y: 0.10 },
+                Age: { x: -0.89, y: -0.45 },
+                Region: { x: -0.50, y: -0.87 }
             };
             return slotMap[nodeId] || null;
         }
 
-        function calculateLayerLevels(nodeIds, edges) {
-            const normalNodeIds = nodeIds.filter(id => !isPpcmNode(id));
-            const normalNodeSet = new Set(normalNodeIds);
-            const inDegree = new Map(normalNodeIds.map(id => [id, 0]));
-            const children = new Map(normalNodeIds.map(id => [id, []]));
-            const level = new Map(normalNodeIds.map(id => [id, 0]));
-
-            for (const edge of edges) {
-                if (!normalNodeSet.has(edge.from) || !normalNodeSet.has(edge.to)) continue;
-                children.get(edge.from).push(edge.to);
-                inDegree.set(edge.to, inDegree.get(edge.to) + 1);
-            }
-
-            const queue = normalNodeIds.filter(id => inDegree.get(id) === 0);
-            let visitedCount = 0;
-
-            while (queue.length > 0) {
-                const nodeId = queue.shift();
-                visitedCount += 1;
-
-                for (const childId of children.get(nodeId)) {
-                    level.set(childId, Math.max(level.get(childId), level.get(nodeId) + 1));
-                    inDegree.set(childId, inDegree.get(childId) - 1);
-                    if (inDegree.get(childId) === 0) queue.push(childId);
-                }
-            }
-
-            if (visitedCount !== normalNodeIds.length) {
-                normalNodeIds.forEach((nodeId, index) => level.set(nodeId, Math.floor(index / 5)));
-            }
-
-            const maxNormalLevel = normalNodeIds.reduce((max, nodeId) => Math.max(max, level.get(nodeId)), 0);
-            nodeIds.filter(isPpcmNode).forEach(nodeId => level.set(nodeId, maxNormalLevel + 1));
-            return level;
+        function getFallbackNetworkSlot(index, count) {
+            const angle = -Math.PI / 2 + index * ((Math.PI * 2) / Math.max(count, 1));
+            return { x: Math.cos(angle), y: Math.sin(angle) };
         }
 
-        function computeDeterministicLayout(structData) {
-            const nodeIds = structData.nodes.map(node => node.id);
-            const parentMap = new Map(nodeIds.map(nodeId => [nodeId, []]));
-            const childMap = new Map(nodeIds.map(nodeId => [nodeId, []]));
+        function relaxNetworkLayout(nodeIds, positions, metrics) {
+            const anchorNodeId = nodeIds.find(isPpcmNode);
 
-            for (const edge of structData.edges) {
-                if (parentMap.has(edge.to)) {
-                    parentMap.get(edge.to).push(edge.from);
-                }
-                if (childMap.has(edge.from)) {
-                    childMap.get(edge.from).push(edge.to);
-                }
-            }
-
-            const maxNodeWidth = Math.max(...nodeIds.map(getNodeWidth));
-            const maxNodeHeight = Math.max(...nodeIds.map(estimateNodeHeight));
-            const horizontalGap = clamp(maxNodeWidth + 170, 610, 760);
-            const verticalGap = clamp(maxNodeHeight + 112, 340, 430);
-            const positions = {};
-
-            nodeIds.forEach((nodeId, index) => {
-                const slot = getPreferredNetworkSlot(nodeId) || {
-                    col: (index % 3) - 1,
-                    row: Math.floor(index / 3)
-                };
-                positions[nodeId] = {
-                    x: slot.col * horizontalGap,
-                    y: slot.row * verticalGap
-                };
-            });
-
-            for (let pass = 0; pass < 5; pass += 1) {
+            for (let pass = 0; pass < 10; pass += 1) {
                 for (let i = 0; i < nodeIds.length; i += 1) {
                     for (let j = i + 1; j < nodeIds.length; j += 1) {
                         const a = nodeIds[i];
                         const b = nodeIds[j];
                         const aPos = positions[a];
                         const bPos = positions[b];
-                        const minX = (getNodeWidth(a) + getNodeWidth(b)) / 2 + 62;
-                        const minY = (estimateNodeHeight(a) + estimateNodeHeight(b)) / 2 + 48;
-                        const dx = bPos.x - aPos.x;
-                        const dy = bPos.y - aPos.y;
+                        const minX = (getNodeWidth(a) + getNodeWidth(b)) / 2 + 34;
+                        const minY = (estimateNodeHeight(a) + estimateNodeHeight(b)) / 2 + 26;
+                        let dx = bPos.x - aPos.x;
+                        let dy = bPos.y - aPos.y;
+
+                        if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) {
+                            dx = (j - i) * 0.8 || 0.8;
+                            dy = (i + j) * 0.45 || 0.45;
+                        }
 
                         if (Math.abs(dx) < minX && Math.abs(dy) < minY) {
-                            const pushX = (minX - Math.abs(dx)) / 2 + 10;
-                            const pushY = (minY - Math.abs(dy)) / 2 + 8;
+                            const shareA = a === anchorNodeId ? 0 : (b === anchorNodeId ? 1 : 0.5);
+                            const shareB = b === anchorNodeId ? 0 : (a === anchorNodeId ? 1 : 0.5);
                             const directionX = dx >= 0 ? 1 : -1;
                             const directionY = dy >= 0 ? 1 : -1;
+                            const overlapX = minX - Math.abs(dx);
+                            const overlapY = minY - Math.abs(dy);
 
-                            if (Math.abs(dx) / minX < Math.abs(dy) / minY) {
-                                if (!isPpcmNode(a)) aPos.x -= pushX * directionX;
-                                if (!isPpcmNode(b)) bPos.x += pushX * directionX;
+                            if (overlapX < overlapY) {
+                                const push = overlapX + 8;
+                                aPos.x -= directionX * push * shareA;
+                                bPos.x += directionX * push * shareB;
                             } else {
-                                if (!isPpcmNode(a)) aPos.y -= pushY * directionY;
-                                if (!isPpcmNode(b)) bPos.y += pushY * directionY;
+                                const push = overlapY + 8;
+                                aPos.y -= directionY * push * shareA;
+                                bPos.y += directionY * push * shareB;
                             }
                         }
                     }
                 }
-            }
 
-            const ppcmId = nodeIds.find(isPpcmNode);
-            if (ppcmId) {
-                const bottomY = Math.max(...nodeIds.filter(id => id !== ppcmId).map(id => positions[id].y));
-                positions[ppcmId] = { x: 0, y: bottomY + verticalGap * 0.95 };
+                for (const nodeId of nodeIds) {
+                    if (nodeId === anchorNodeId) {
+                        positions[nodeId] = { x: 0, y: 0 };
+                        continue;
+                    }
+                    positions[nodeId].x = clamp(positions[nodeId].x, -metrics.maxX, metrics.maxX);
+                    positions[nodeId].y = clamp(positions[nodeId].y, -metrics.maxY, metrics.maxY);
+                }
             }
+        }
 
+        function computeDeterministicLayout(structData) {
+            const nodeIds = structData.nodes.map(node => node.id);
+            const metrics = getLayoutMetrics(nodeIds);
+            const positions = {};
+
+            nodeIds.forEach((nodeId, index) => {
+                const slot = getPreferredNetworkSlot(nodeId) || getFallbackNetworkSlot(index, nodeIds.length);
+                positions[nodeId] = {
+                    x: slot.x * metrics.radiusX,
+                    y: slot.y * metrics.radiusY
+                };
+            });
+
+            relaxNetworkLayout(nodeIds, positions, metrics);
             return positions;
         }
 
         function buildInitialNode(node, position) {
-            const minHeight = estimateNodeHeight(node.id);
+            const sizeProfile = getNodeSizeProfile(node.id);
             return {
                 id: node.id,
                 label: allNodesInfo[node.id]?.name || node.label,
@@ -419,17 +441,18 @@
                 physics: false,
                 shape: 'ellipse',
                 font: {
-                    size: getAdaptiveFontSize(node.id),
+                    size: sizeProfile.fontSize,
                     color: '#0f172a',
                     face: 'Segoe UI',
                     align: 'center',
                     multi: true
                 },
-                color: { background: '#eef6ff', border: isPpcmNode(node.id) ? '#b45309' : '#2a4a7a' },
-                borderWidth: isPpcmNode(node.id) ? 2 : 2,
-                margin: { top: 14, right: 20, bottom: 14, left: 20 },
-                widthConstraint: { minimum: getNodeWidth(node.id), maximum: getNodeWidth(node.id) },
-                heightConstraint: { minimum: minHeight }
+                color: { background: isPpcmNode(node.id) ? '#fff7ed' : '#f5f9ff', border: isPpcmNode(node.id) ? '#b45309' : '#496a8f' },
+                borderWidth: isPpcmNode(node.id) ? 3 : 2,
+                margin: sizeProfile.margin,
+                widthConstraint: { minimum: sizeProfile.width, maximum: sizeProfile.width },
+                heightConstraint: { minimum: sizeProfile.height },
+                shadow: { enabled: true, color: 'rgba(15,23,42,0.08)', size: 7, x: 0, y: 3 }
             };
         }
 
@@ -660,30 +683,20 @@
         }
 
         function buildNodeLabel(nodeId, probs) {
-            const name = allNodesInfo[nodeId]?.name || nodeId;
-            const lines = [name];
-            const entries = getOutcomeEntries(nodeId, probs);
-
-            for (let index = 0; index < entries.length; index += 2) {
-                const rowEntries = entries.slice(index, index + 2);
-                lines.push(rowEntries.map(([outcome, probability]) => {
-                    return `${outcome} ${(Number(probability) * 100).toFixed(1)}%`;
-                }).join(' / '));
-            }
-
-            if (currentEvidence[nodeId]) {
-                lines.push(`Evidence: ${currentEvidence[nodeId]}`);
-            }
-
-            return lines.join('\n');
+            return getNodeLabelLines(nodeId, probs).join('\n');
         }
 
         function fitReadableGraph() {
             if (!network) return;
-            network.fit({ animation: false, padding: 52 });
+            const viewport = getGraphViewport();
+            const padding = viewport.width >= 1000 ? 42 : 30;
+            network.fit({ animation: false, padding });
             const scale = network.getScale();
-            if (scale < 0.76) {
-                network.moveTo({ scale: 0.76, animation: false });
+            const minReadableScale = viewport.width >= 1000 ? 0.88 : 0.74;
+            const maxComfortableScale = viewport.width >= 1000 ? 1.08 : 1.0;
+            const targetScale = clamp(scale, minReadableScale, maxComfortableScale);
+            if (Math.abs(targetScale - scale) > 0.01) {
+                network.moveTo({ scale: targetScale, animation: false });
             }
         }
 
@@ -704,9 +717,10 @@
                 const isPpcm = isPpcmNode(nodeId);
                 const topProb = getMaxProbability(probs);
                 const intensity = Math.max(0.15, topProb);
+                const sizeProfile = getNodeSizeProfile(nodeId, probs);
                 const bgColor = isPpcm
-                    ? '#fff3d6'
-                    : `rgb(${Math.round(235 - 80 * intensity)}, ${Math.round(244 - 65 * intensity)}, ${Math.round(255 - 70 * intensity)})`;
+                    ? '#fff7ed'
+                    : `rgb(${Math.round(245 - 52 * intensity)}, ${Math.round(249 - 48 * intensity)}, ${Math.round(255 - 36 * intensity)})`;
 
                 updates.push({
                     id: nodeId,
@@ -717,16 +731,16 @@
                     },
                     borderWidth: isEvidence ? 3 : 2,
                     font: {
-                        size: getAdaptiveFontSize(nodeId),
+                        size: sizeProfile.fontSize,
                         color: '#0f172a',
                         face: 'Segoe UI',
                         align: 'center',
                         multi: true,
                         bold: isEvidence || isPpcm
                     },
-                    margin: { top: 14, right: 20, bottom: 14, left: 20 },
-                    widthConstraint: { minimum: getNodeWidth(nodeId), maximum: getNodeWidth(nodeId) },
-                    heightConstraint: { minimum: estimateNodeHeight(nodeId) },
+                    margin: sizeProfile.margin,
+                    widthConstraint: { minimum: sizeProfile.width, maximum: sizeProfile.width },
+                    heightConstraint: { minimum: sizeProfile.height },
                     x: positions[nodeId]?.x,
                     y: positions[nodeId]?.y,
                     fixed: { x: true, y: true },
